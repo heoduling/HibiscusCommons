@@ -46,6 +46,7 @@ public class NMSPacketChannel extends ChannelDuplexHandler {
         }
 
         switch (packet) {
+            case ClientboundBundlePacket bundlePacket -> msg = handleEquipmentBundle(bundlePacket);
             case ClientboundContainerSetContentPacket setContentPacket -> msg = handleMenuChange(setContentPacket);
             case ClientboundContainerSetSlotPacket setSlotPacket -> msg = handleSlotChange(setSlotPacket);
             case ClientboundSetEquipmentPacket equipmentPacket -> msg = handlePlayerEquipment(equipmentPacket);
@@ -55,8 +56,27 @@ public class NMSPacketChannel extends ChannelDuplexHandler {
             default -> {}
         }
 
-        if (msg == null) return;
-        else super.write(ctx, msg, promise);
+        if (msg == null) {
+            promise.trySuccess();
+            return;
+        }
+        super.write(ctx, msg, promise);
+    }
+
+    private Packet<?> handleEquipmentBundle(@NotNull ClientboundBundlePacket packet) {
+        List<Packet<? super ClientGamePacketListener>> children = new ArrayList<>();
+        boolean changed = false;
+        // Connection has already handled readiness, ordering and extra packets before this write.
+        for (Packet<? super ClientGamePacketListener> child : packet.subPackets()) {
+            Packet<? super ClientGamePacketListener> replacement = child;
+            if (child instanceof ClientboundSetEquipmentPacket equipmentPacket) {
+                replacement = handlePlayerEquipment(equipmentPacket);
+            }
+            if (replacement != child) changed = true;
+            if (replacement != null) children.add(replacement);
+        }
+        if (!changed) return packet;
+        return children.isEmpty() ? null : new ClientboundBundlePacket(children);
     }
 
     private Packet<?> handleMenuChange(@NotNull ClientboundContainerSetContentPacket packet) {
@@ -123,7 +143,7 @@ public class NMSPacketChannel extends ChannelDuplexHandler {
         return new ClientboundContainerSetSlotPacket(packet.getContainerId(), packet.getStateId(), wrapper.getSlot(), nmsItem);
     }
 
-    private Packet<?> handlePlayerEquipment(@NotNull ClientboundSetEquipmentPacket packet) {
+    private ClientboundSetEquipmentPacket handlePlayerEquipment(@NotNull ClientboundSetEquipmentPacket packet) {
         MessagesUtil.sendDebugMessages("ClientboundSetEquipmentPacket");
         final List<Pair<net.minecraft.world.entity.EquipmentSlot, ItemStack>> nmsArmor = packet.getSlots();
         final int entity = packet.getEntity();
